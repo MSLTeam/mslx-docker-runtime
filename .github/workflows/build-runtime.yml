@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java_version: ["8", "11", "16", "17", "21", "25"]
+        java_version: ["8", "11", "16.0.2_7", "17", "21", "25"]
     
     steps:
       - name: 拉取代码
@@ -41,7 +41,19 @@ jobs:
           username: ${{ secrets.TENCENT_DOCKER_USERNAME }}
           password: ${{ secrets.TENCENT_DOCKER_PASSWORD }}
 
-      # --- 格式化 Tag 标签 ---
+      # --- 动态格式化干净的 Tag 标签 ---
+      - name: 计算最终镜像 Tag
+        id: calc_tag
+        run: |
+          RAW_VERSION="${{ matrix.java_version }}"
+          # 如果是特殊的 16 小版本，强制规范化转换为 java16
+          if [ "$RAW_VERSION" = "16.0.2_7" ]; then
+            FINAL_TAG="java16"
+          else
+            FINAL_TAG="java${RAW_VERSION}"
+          fi
+          echo "tag_name=${FINAL_TAG}" >> $GITHUB_OUTPUT
+
       - name: 获取镜像元数据
         id: meta
         uses: docker/metadata-action@v5
@@ -50,7 +62,7 @@ jobs:
             ${{ env.IMAGE_NAME }}
             ${{ env.TENCENT_REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=java${{ matrix.java_version }}
+            type=raw,value=${{ steps.calc_tag.outputs.tag_name }}
 
       # --- 多平台联合构建与推送 ---
       - name: 🚀 执行跨平台构建并推送
@@ -71,6 +83,7 @@ jobs:
   trigger-sync:
     name: 唤醒 CNB 同步中转站
     needs: build-and-push
+    if: always() && (needs.build-and-push.result == 'success' || needs.build-and-push.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: 发送同步信号至 CNB
