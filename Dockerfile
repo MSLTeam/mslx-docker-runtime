@@ -33,9 +33,10 @@ RUN apt-get update && \
     python3-venv \
     && \
     pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip3 install mcdreforged --break-system-packages || pip3 install mcdreforged && \
+    (pip3 install mcdreforged --break-system-packages || pip3 install mcdreforged) && \
     ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
+    ln -s /usr/bin/python3 /usr/bin/python && \
     rm -rf /var/lib/apt/lists/*
 
 ENV LANG=C.UTF-8 \
