@@ -9,12 +9,12 @@ env:
 
 jobs:
   build-and-push:
-    name: 构建 Java ${{ matrix.java_version }} 运行时
+    name: 构建运行时 -> ${{ matrix.java_version == 'network-tool' && 'Network Tool' || format('Java {0}', matrix.java_version) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        java_version: ["8", "11", "17", "21", "25"]
+        java_version: ["8", "11", "17", "21", "25", "network-tool"]
     
     steps:
       - name: 拉取代码
@@ -50,15 +50,15 @@ jobs:
             ${{ env.IMAGE_NAME }}
             ${{ env.TENCENT_REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # 移除了 Bash 计算逻辑，直接输出 java8, java11, java17 ...
-            type=raw,value=java${{ matrix.java_version }}
+            type=raw,value=network-tool,enable=${{ matrix.java_version == 'network-tool' }}
+            type=raw,value=java${{ matrix.java_version }},enable=${{ matrix.java_version != 'network-tool' }}
 
       # --- 多平台联合构建与推送 ---
       - name: 🚀 执行跨平台构建并推送
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ${{ matrix.java_version == 'network-tool' && './Dockerfile.network' || './Dockerfile' }}
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
