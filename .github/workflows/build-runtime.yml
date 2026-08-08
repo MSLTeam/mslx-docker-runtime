@@ -42,12 +42,12 @@ jobs:
             MY_TAG="network-tool"
             
             # 获取 alpine:latest 的最新 Digest
-            BASE_DIGEST=$(docker buildx imagetools inspect $BASE_IMAGE --raw 2>/dev/null | sha256sum | awk '{print $1}')
+            BASE_DIGEST=$(docker buildx imagetools inspect $BASE_IMAGE --raw 2>/devnull | sha256sum | awk '{print $1}')
             echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
             echo "🏔️ [Docker Hub] 官方基础镜像 ($BASE_IMAGE) 当前摘要: $BASE_DIGEST"
 
             # 读取远程镜像记录的 Digest
-            REMOTE_LABELS=$(docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${MY_TAG} 2>/dev/null || true)
+            REMOTE_LABELS=$(docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${MY_TAG} 2>/devnull || true)
             REMOTE_BASE_DIGEST=$(echo "$REMOTE_LABELS" | grep -i "base.image.digest" | awk '{print $2}' || true)
             echo "🏷️ [远程镜像] 记录的 Base Digest: ${REMOTE_BASE_DIGEST:-未知}"
 
@@ -70,12 +70,12 @@ jobs:
             echo "📦 [PyPI] MCDReforged 最新版本: $LATEST_MCDR"
 
             # 2. 获取对应的 Temurin 基础镜像 Digest
-            BASE_DIGEST=$(docker buildx imagetools inspect $BASE_IMAGE --raw 2>/dev/null | sha256sum | awk '{print $1}')
+            BASE_DIGEST=$(docker buildx imagetools inspect $BASE_IMAGE --raw 2>/devnull | sha256sum | awk '{print $1}')
             echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
             echo "☕ [Docker Hub] 官方基础镜像 ($BASE_IMAGE) 当前摘要: $BASE_DIGEST"
 
             # 3. 读取远程镜像 Label
-            REMOTE_LABELS=$(docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${MY_TAG} 2>/dev/null || true)
+            REMOTE_LABELS=$(docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${MY_TAG} 2>/devnull || true)
             REMOTE_MCDR=$(echo "$REMOTE_LABELS" | grep -i "mcdreforged.version" | awk '{print $2}' || true)
             REMOTE_BASE_DIGEST=$(echo "$REMOTE_LABELS" | grep -i "base.image.digest" | awk '{print $2}' || true)
 
@@ -115,19 +115,7 @@ jobs:
           username: ${{ secrets.TENCENT_DOCKER_USERNAME }}
           password: ${{ secrets.TENCENT_DOCKER_PASSWORD }}
 
-      - name: 获取镜像元数据
-        if: steps.check.outputs.should_build == 'true'
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ env.IMAGE_NAME }}
-            ${{ env.TENCENT_REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=network-tool,enable=${{ matrix.java_version == 'network-tool' }}
-            type=raw,value=java${{ matrix.java_version }},enable=${{ matrix.java_version != 'network-tool' }}
-
-      # --- 步骤 3：构建并推送 ---
+      # --- 步骤 3：直接构建并推送 (精简掉容易出错的 metadata-action) ---
       - name: 🚀 执行跨平台构建并推送
         if: steps.check.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
@@ -138,9 +126,11 @@ jobs:
           push: true
           build-args: |
             JAVA_VERSION=${{ matrix.java_version }}
-          # 动态写入 Label
+          # 动态硬化 Tag 名称：如果是 network-tool 就用 network-tool，否则用 javaXX
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ matrix.java_version == 'network-tool' && 'network-tool' || format('java{0}', matrix.java_version) }}
+            ${{ env.TENCENT_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.java_version == 'network-tool' && 'network-tool' || format('java{0}', matrix.java_version) }}
           labels: |
-            ${{ steps.meta.outputs.labels }}
             base.image.digest=${{ steps.check.outputs.base_digest }}
             mcdreforged.version=${{ steps.check.outputs.mcdr_version || 'none' }}
           provenance: false
