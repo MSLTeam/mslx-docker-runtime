@@ -3,6 +3,7 @@ name: 🛠️ 构建 & 推送 MSLX 运行时镜像
 on:
   workflow_dispatch:
   schedule:
+    # 北京时间（UTC+8）每周一凌晨 03:00 (UTC 时间周日 19:00)
     - cron: '0 19 * * 0'
 
 env:
@@ -11,40 +12,111 @@ env:
 
 jobs:
   build-and-push:
-    name: 构建运行时 -> ${{ matrix.java_version == 'network-tool' && 'Network Tool' || format('Java {0}', matrix.java_version) }}
+    name: 运行构建 -> ${{ matrix.java_version == 'network-tool' && 'Network Tool' || format('Java {0}', matrix.java_version) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         java_version: ["8", "11", "17", "21", "25", "network-tool"]
-    
+
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
 
+      # --- 步骤 1：针对 network-tool 与 Java 运行时做区分检测 ---
+      - name: 🔍 检查依赖与基础镜像更新
+        id: check
+        run: |
+          JAVA_VER="${{ matrix.java_version }}"
+          
+          # 手动触发 (workflow_dispatch) 直接强制构建
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "🚀 手动触发构建，跳过版本检测。"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ "$JAVA_VER" = "network-tool" ]; then
+            # --- 【network-tool 逻辑】 ---
+            BASE_IMAGE="alpine:latest"
+            MY_TAG="network-tool"
+            
+            # 获取 alpine:latest 的最新 Digest
+            BASE_DIGEST=$(docker buildx imagetools inspect $BASE_IMAGE --raw 2>/dev/null | sha256sum | awk '{print $1}')
+            echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
+            echo "🏔️ [Docker Hub] 官方基础镜像 ($BASE_IMAGE) 当前摘要: $BASE_DIGEST"
+
+            # 读取远程镜像记录的 Digest
+            REMOTE_LABELS=$(docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${MY_TAG} 2>/dev/null || true)
+            REMOTE_BASE_DIGEST=$(echo "$REMOTE_LABELS" | grep -i "base.image.digest" | awk '{print $2}' || true)
+            echo "🏷️ [远程镜像] 记录的 Base Digest: ${REMOTE_BASE_DIGEST:-未知}"
+
+            if [ "$BASE_DIGEST" != "$REMOTE_BASE_DIGEST" ]; then
+              echo "⚠️ 发现 Alpine 官方基础镜像有更新，准备构建 network-tool！"
+              echo "should_build=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ network-tool 的 Alpine 基础镜像无变化，跳过构建！"
+              echo "should_build=false" >> $GITHUB_OUTPUT
+            fi
+
+          else
+            # --- 【Java 运行时逻辑】 ---
+            BASE_IMAGE="eclipse-temurin:${JAVA_VER}-jre"
+            MY_TAG="java${JAVA_VER}"
+
+            # 1. 获取 PyPI 上 MCDReforged 最新版本
+            LATEST_MCDR=$(curl -s https://pypi.org/pypi/mcdreforged/json | jq -r '.info.version')
+            echo "mcdr_version=$LATEST_MCDR" >> $GITHUB_OUTPUT
+            echo "📦 [PyPI] MCDReforged 最新版本: $LATEST_MCDR"
+
+            # 2. 获取对应的 Temurin 基础镜像 Digest
+            BASE_DIGEST=$(docker buildx imagetools inspect $BASE_IMAGE --raw 2>/dev/null | sha256sum | awk '{print $1}')
+            echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
+            echo "☕ [Docker Hub] 官方基础镜像 ($BASE_IMAGE) 当前摘要: $BASE_DIGEST"
+
+            # 3. 读取远程镜像 Label
+            REMOTE_LABELS=$(docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${MY_TAG} 2>/dev/null || true)
+            REMOTE_MCDR=$(echo "$REMOTE_LABELS" | grep -i "mcdreforged.version" | awk '{print $2}' || true)
+            REMOTE_BASE_DIGEST=$(echo "$REMOTE_LABELS" | grep -i "base.image.digest" | awk '{print $2}' || true)
+
+            echo "🏷️ [远程镜像] 记录 MCDR: ${REMOTE_MCDR:-未知}"
+            echo "🏷️ [远程镜像] 记录 Base Digest: ${REMOTE_BASE_DIGEST:-未知}"
+
+            if [ "$LATEST_MCDR" != "$REMOTE_MCDR" ] || [ "$BASE_DIGEST" != "$REMOTE_BASE_DIGEST" ]; then
+              echo "⚠️ 检测到 MCDR 更新或 Java 基础镜像变动，准备构建 java${JAVA_VER}！"
+              echo "should_build=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ java${JAVA_VER} 已经是最新，跳过本次构建！"
+              echo "should_build=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      # --- 步骤 2：环境准备 (仅在需要构建时执行) ---
       - name: 设置 QEMU 跨平台模拟器
+        if: steps.check.outputs.should_build == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: 设置 Docker Buildx 构建器
+        if: steps.check.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # --- 登录 Docker Hub ---
       - name: 登录 Docker Hub
+        if: steps.check.outputs.should_build == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # --- 登录腾讯云 (香港) ---
       - name: 登录腾讯云 TCR (香港)
+        if: steps.check.outputs.should_build == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.TENCENT_REGISTRY }}
           username: ${{ secrets.TENCENT_DOCKER_USERNAME }}
           password: ${{ secrets.TENCENT_DOCKER_PASSWORD }}
 
-      # --- 格式化 Tag 标签 ---
       - name: 获取镜像元数据
+        if: steps.check.outputs.should_build == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -55,8 +127,9 @@ jobs:
             type=raw,value=network-tool,enable=${{ matrix.java_version == 'network-tool' }}
             type=raw,value=java${{ matrix.java_version }},enable=${{ matrix.java_version != 'network-tool' }}
 
-      # --- 多平台联合构建与推送 ---
+      # --- 步骤 3：构建并推送 ---
       - name: 🚀 执行跨平台构建并推送
+        if: steps.check.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -65,8 +138,11 @@ jobs:
           push: true
           build-args: |
             JAVA_VERSION=${{ matrix.java_version }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          # 动态写入 Label
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            base.image.digest=${{ steps.check.outputs.base_digest }}
+            mcdreforged.version=${{ steps.check.outputs.mcdr_version || 'none' }}
           provenance: false
           sbom: false
           outputs: type=registry,oci-mediatypes=true
