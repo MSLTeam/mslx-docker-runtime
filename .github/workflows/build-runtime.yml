@@ -2,6 +2,8 @@ name: 🛠️ 构建 & 推送 MSLX 运行时镜像
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 19 * * 0'
 
 env:
   IMAGE_NAME: xiaoyululu/mslx-runtime
